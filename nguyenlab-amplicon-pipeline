@@ -1,0 +1,678 @@
+NGUYEN LAB AMPLICON ANALYSIS PIPELINE WITH QIIME2
+updated July 2019
+
+#################################################################################
+CITATION
+#################################################################################
+#It took a number of years and a lot of refinement to produce this pipeline. 
+#If you use this pipeline or part of it in your research, I would very much appreciate a citation!
+
+#Nguyen, NH. Amplicon analysis pipeline with QIIME2. https://github.com/nnguyenlab/amplicon-pipeline. Date accessed [].
+
+#################################################################################
+SOME IMPORTANT READINGS
+#################################################################################
+#READ and PERFORM all of the latest QIIME2 tutorials prior to starting.
+This way you have a good grasp of the basic function as well as the breadth of capabilities in QIIME2.
+#https://docs.qiime2.org/2019.4/tutorials/
+
+#READ Peter Kennedy's discussion on various filtering steps to best treat your amplicon data:
+#http://fungal-sequencing-methods-discussion.blogspot.com/
+
+#READ Nhu Nguyen's discussion on why clustering is still necessary:
+#https://drive.google.com/file/d/1vjwqG6oNNDH0NjbpMOBhqqCtzpmFF4dz
+
+
+#################################################################################
+UNIX TUTORIAL
+#################################################################################
+#Familiarize yourself with the UNIX tutorial such as one provided in the link below.
+#You should be able to navigate the command line (terminal) interface on a UNIX operating system.
+#http://people.ischool.berkeley.edu/~kevin/unix-tutorial/toc.html
+
+
+#################################################################################
+FILE NAMING CONVENTION
+#################################################################################
+#It is good practice to name your files in ways that make sense and others can understand them.
+#Hierarchies are useful. Start with the type of file, followed by project, and subcategories in that project.
+#This will allow you to keep track of all your files in ways that make sense down the pipeline.
+
+
+#################################################################################
+QIIME VERSION & PARAMETER NOTE
+#################################################################################
+#These commands were built under QIIME2 v2018.8
+#Since then a few parameter names have changed (QIIME likes to do this).
+#If your commands return an error, look into the --help file to find the correct parameter names.
+
+#For each of these commands/steps, it is useful (and informative) to look at the --help file.
+#Sometimes you will find useful parameters that are not apparent in this workflow.
+
+#################################################################################
+CREATE A QIIME METADATA FILE
+#################################################################################
+#The QIIME metadata file is a tab-delimited file that contains the necessary information regarding your experimental data.
+#It is necessary both for processing raw reads and perform basic analyses.
+#At least the following tab-delimited columns are required; other specific data columns will help you later on in various statistical analyses:
+
+#SampleID BarcodeSequence  LinkerPrimerSequence Treatment Description
+Heated40C.1 CGTACGATAAGTCGAG  NA  +40C  Sample-heated-to-40C
+
+#"#" defines the header line
+#"SampleID", for clarity should be something that is informative towards the experiment not just the sample number.
+#SampleIDs should contain only alphanumeric characters (i.e. in the range of [a-z], [A-Z], or [0-9]), the period (.) character, or the dash (-) character. 
+#"BarcodeSequence" for dual-barcoding should be concatenated into a single string. The format should be ReverseComplementI2+I1.
+#"LinkerPrimerSequence" is for 454 pyrosequencing. Not required for Illumina data.
+#"Treatment" is the basic treatment. Add as many columns as necessary for your experimental needs.
+#"Description" has to be at the end. It's not used in analyses and is typically useless but it's required.
+
+#Use Keemei (plugin) to validate your metadata file in Google Sheets. Make sure that it is error free before going forward!
+https://keemei.qiime2.org/
+
+#FOR MULTIPLE GENES combined into one sequencing run, each metadata file should contain a single gene to ease downstream processing.
+#Demultiplex and analyze each of these genes separately.
+
+#################################################################################
+PREPARING YOUR RAW SEQUENCE DATA FOR DEMULTIPLEXING
+#################################################################################
+#DOWNLOAD your raw data into a folder. You should have 4 files: R1, R2, I1, I2.
+mkdir raw_data
+cd raw_data
+
+#UNZIP all files, saving the original files .gz files (for later use)
+gunzip -k *
+
+#RENAME your raw data
+mv Undetermined_S0_L001_I1_001.fastq I1.fastq
+mv Undetermined_S0_L001_I2_001.fastq I2.fastq
+mv Undetermined_S0_L001_R1_001.fastq forward.fastq
+mv Undetermined_S0_L001_R2_001.fastq reverse.fastq
+
+#MOVE the fastq files to the "gz_data" folder
+cd..
+mkdir gz_data
+mv raw_data/I1.fastq gz_data/I1.fastq
+mv raw_data/I2.fastq gz_data/I2.fastq
+mv raw_data/forward.fastq gz_data/forward.fastq
+mv raw_data/reverse.fastq gz_data/reverse.fastq
+
+#EXTRACT barcodes from I1 & I2 files using macqiime (QIIME1)
+#You will need to have QIIME1 (MACQIIME) intalled on your machine
+#If you don't have MACQIIME installed, you can call the script "extract_barcodes.py" from the lab's "Lab resources/Scripts/anaconda/bin" shared folder
+#You will need to run the "extract_barcodes.py" from that folder because it requires other scripts from that folder to work
+#The program will create "read1.fastq", "read2.fastq", and "barcodes.fastq". "The barcodes.fastq" file is the only useful file
+
+cd gz_data
+macqiime
+path-to-script/extract_barcodes.py --fastq1 I1.fastq --fastq2 I2.fastq --bc1_len 8 --bc2_len 8 --input_type barcode_paired_end
+
+#REMOVE the extraneous files that you don't need anymore
+rm reads1.fastq reads2.fastq I1.fastq I2.fastq
+
+#COMPRESS the remaining files before importing to QIIME2
+gzip *
+
+cd..
+
+#################################################################################
+IMPORT DATA INTO QIIME2
+#################################################################################
+#ACTIVATE the latest environment that QIIME2 was installed in
+#You can list all discoverable environments with 'conda info --envs'.
+source activate qiime2-2019.4
+
+----------------------------
+#IMPORT MULTIPLEXED DATA
+----------------------------
+#IMPORT multiplexed sequence and barcode reads from a directory
+#Your "gz_data" directory should contain only three files: "forward.fastq.gz", "reverse.fastq.gz", and "barcodes.fastq.gz"
+qiime tools import \
+  --type EMPPairedEndSequences \
+  --input-path gz_data \
+  --output-path imported-paired-end-seqs.qza
+
+----------------------------
+#IMPORT DEMULTIPLEXED DATA
+----------------------------
+#If you have files from a sequencing center that had already been demultiplexed (demux), import them using the following steps.
+#Sometimes demux files are stored in multiple different folders. Use a shell loop to find and move them all into one single folder to be imported into QIIME.
+
+find . -name "*.gz" | while read file
+ do
+   mv $file /path-to-files/demux/
+ done
+
+#CREATE a comma delimited "fastq manifest" file in order to import multiple individual files into QIIME
+#Example manifest file:
+sample-id,absolute-filepath,direction
+sample-1,$PWD/some/filepath/sample1_R1.fastq.gz,forward
+sample-1,$PWD/some/filepath/sample1_R2.fastq.gz,reverse
+sample-2,$PWD/some/filepath/sample2_R1.fastq.gz,forward
+sample-2,$PWD/some/filepath/sample2_R2.fastq.gz,reverse
+ 
+cd demux
+qiime tools import \
+  --type 'SampleData[PairedEndSequencesWithQuality]' \
+  --input-path manifest.csv \
+  --input-format PairedEndFastqManifestPhred33 \
+  --output-path imported-paired-end-seqs.qza
+
+
+#################################################################################
+DEMULTIPLEX DATA
+#################################################################################
+#DEMULTIPLEX paired sequences using the imported file from above (imported-paired-end-seqs.qza)
+#Note that if your runs contain multiple genes, demultiplex each gene using its own metadata file.
+#Newer version of QIIME2 may allow for splitting of demultiplexed samples into multiple qza files.
+
+#CREATE a folder for each gene you will work with.
+#Place the metadatafile into the appropriate folder.
+mkdir 16S; mkdir 18S; mkdir ITS
+
+#Within each directory, run:
+
+qiime demux emp-paired \
+  --m-barcodes-file metadata.txt \
+  --m-barcodes-column BarcodeSequence \
+  --i-seqs imported-paired-end-seqs.qza \
+  --o-per-sample-sequences demux.qza \
+  --o-error-correction-details barcode-error-correction-details.qza \
+  --p-rev-comp-mapping-barcodes \
+  --p-no-golay-error-correction
+
+#CREATE a summary of demultiplexed data
+qiime demux summarize \
+  --i-data demux.qza \
+  --o-visualization demux.qzv
+
+#VIEW the summary file and determine the quality of the sequences
+qiime tools view demux.qzv
+
+
+#################################################################################
+TRIM CONSERVED REGION FROM ITS (ITS only)
+#################################################################################
+#Trim conserved regions with ITSxpress.
+#We found that without trimming, taxonomic classification is not very accurate.
+
+qiime itsxpress trim-pair-output-unmerged \
+  --i-per-sample-sequences demux.qza \
+  --p-region ITS1 \
+  --p-taxa F \
+  --p-threads 0 \
+  --o-trimmed demux-ITS-trimmed.qza
+
+#The trimmed ITS can be passed onto the DADA2 denoising step below. No further truncation is necessary!
+
+#################################################################################
+SEQUENCE QUALITY FILTER & DENOISE
+#################################################################################
+#FILTER sequences (quality filtering) using DADA2
+#Quality control (can be done on either multiplexed or demultiplexed sequences)
+#Currently, DADA2 OTUs (CSVs) for conservative genes such as 16S and 18S are robust enough to be considered as "good" OTUs.
+#For less conservative genes such as ITS, clustering is still necessary and highly recommended.
+#--p-n-reads-learn default [1M seqs = 250Mb]; this is ~10% of the demultiplexed data. Adjust this value to correspond to your data. If your data has < 10M seqs, use the default.
+#--p-n-threads 0 = use all available cores; with 8 cores & 64GB of memory, a single run took about 12 hours.
+
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs demux.qza \
+  --p-trim-left-f 0 \
+  --p-trunc-len-f 249 \
+  --p-trim-left-r 0 \
+  --p-trunc-len-r 249 \
+  --o-representative-sequences rep-seqs.qza \
+  --o-table table.qza \
+  --o-denoising-stats denoising-stats.qza \
+  --p-n-threads 0 \
+  --p-n-reads-learn 1000000
+  
+#TABULATE the denoising statistics
+qiime metadata tabulate \
+  --m-input-file denoising-stats.qza \
+  --o-visualization denoising-stats.qzv
+
+#VIEW denoising stats; if there is a huge drop in your sequences after pairing, reconsider sequence trimming criteria.
+qiime tools view denoising-stats.qzv
+
+#SUMMARIZE and view summaries of the FeatureTable (OTU table) and FeatureData (representative seqs)
+qiime feature-table summarize \
+  --i-table table.qza \
+  --o-visualization table.qzv \
+  --m-sample-metadata-file metadata.txt
+
+#VIEW feature table summaries
+qiime tools view table.qzv
+
+
+#################################################################################
+ASSIGN TAXONOMY (16S & 18S)
+#################################################################################
+#For 16S assign taxonomy to rep-seqs.qza; use the SILVA 16S database, trimmed to the gene region of interest (V4, 515-806)
+qiime feature-classifier classify-sklearn \
+  --i-classifier silva-132-99-515-806-nb-classifier.qza \
+  --i-reads rep-seqs.qza \
+  --o-classification taxonomy.qza
+
+qiime metadata tabulate \
+  --m-input-file taxonomy.qza \
+  --o-visualization taxonomy.qzv
+  
+qiime taxa barplot \
+  --i-table table.qza \
+  --i-taxonomy taxonomy.qza \
+  --m-metadata-file metadata.txt \
+  --o-visualization taxa-bar-plots.qzv
+
+
+#################################################################################
+CLUSTER OTU (ITS only)
+#################################################################################
+#CLUSTER OTUs by using vsearch
+#Read Peter Kennedy's discussion on the type of clustering to use: http://fungal-sequencing-methods-discussion.blogspot.com/
+#Here we use de novo clustering
+qiime vsearch cluster-features-de-novo \
+  --i-table table.qza  \
+  --i-sequences rep-seqs.qza \
+  --p-perc-identity 0.97 \
+  --o-clustered-table clustered-table.qza \
+  --o-clustered-sequences clustered-rep-seqs.qza
+
+#SUMMARIZE and view summaries of the FeatureTable (OTU table) and FeatureData (representative seqs)
+qiime feature-table summarize \
+  --i-table clustered-table.qza \
+  --m-sample-metadata-file metadata.txt \
+  --o-visualization clustered-table.qzv
+
+
+#################################################################################
+TRAIN CLASSIFERS (Optional)
+#################################################################################
+#Certain classifiers (such as for 16S) are pre-trained but other more specific ones such as ITS will need to be trained.
+#It is highly recommended that classifiers be kept updated as identification sequence databases are updated.
+#Pre-trained 16S & 18S classifiers (GreenGenes and SILVA databases) are available through the QIIME2 website: https://docs.qiime2.org/2018.11/data-resources/
+#Pre-trained ITS is available on our website: http://www2.hawaii.edu/~nn33/lab/resources.html
+#Trained classifiers only works with the version of QIIME2 that they are trained on.
+
+#OR train your own classifier
+#CREATE a working directory
+mkdir UNITE/
+
+#DOWNLOAD the latest identification database from UNITE, save into the UNITE folder
+#I like to use the "global and 97% singletons" dataset
+https://unite.ut.ee/repository.php
+
+#OR get it from the URL (this is UNITE v8.0 2018-11-18)
+cd UNITE
+wget https://files.plutof.ut.ee/doi/0F/6F/0F6F4C85C2553655B6E2B4A0F0BF85AE64A2F769BD82A32053CDEC8708454057.zip
+
+#Rename the file
+mv 0F6F4C85C2553655B6E2B4A0F0BF85AE64A2F769BD82A32053CDEC8708454057.zip UNITE8.0_2018-11-18.zip
+
+#Unzip the file
+tar -zxvf UNITE8.0_2018-11-18.zip
+
+#This will create a series of fasta and taxonomy files
+#I like to use the "dynamic" dataset for fungal sequence classification
+
+#According to QIIME2 documentation "In our experience, fungal ITS classifiers trained on the UNITE reference database do NOT benefit from extracting/trimming reads to primer sites. We recommend training UNITE classifiers on the full reference sequences. Furthermore, we recommend the “developer” sequences (located within the QIIME-compatible release download) because the standard versions of the sequences have already been trimmed to the ITS region (excluding portions of flanking rRNA genes that may be present in amplicons generated with standard ITS primers)." 
+
+#ADD the Nguyen lab "mock community" and "synthetic mock" fasta and taxonomy to these files each time you train an update or new classifier
+#Once added, open the file in a text editor to make sure that the concatenation works well. Sometimes it doesn't and errors needs to be fixed
+#Alternatively, just copy and paste and save to a new file
+cat sh_taxonomy_qiime_ver8_dynamic_s_02.02.2019.txt mock_synthetic_v2_taxonomy.txt mock_v1_taxonomy.txt >> sh_taxonomy_qiime_ver8_dynamic_s_02.02.2019+mock.txt
+cat sh_refs_qiime_ver8_dynamic_s_02.02.2019.fasta mock_v1.fasta mock_synthetic_v2.fasta >> sh_refs_qiime_ver8_dynamic_s_02.02.2019+mock.fasta
+
+qiime tools import \
+ --type FeatureData[Sequence] \
+ --input-path sh_refs_qiime_ver8_dynamic_s_02.02.2019+mock.fasta \
+ --output-path unite-fasta-ver8_dynamic_s_02.02.2019+mock.qza
+
+qiime tools import \
+ --type FeatureData[Taxonomy] \
+ --input-format HeaderlessTSVTaxonomyFormat \
+ --input-path sh_taxonomy_qiime_ver8_dynamic_s_02.02.2019+mock.txt \
+ --output-path unite-tax-ver8_dynamic_s_02.02.2019+mock.qza
+
+#This step took about 10 minutes on a fast machine
+qiime feature-classifier fit-classifier-naive-bayes \
+  --i-reference-reads unite-fasta-ver8_dynamic_s_02.02.2019+mock.qza \
+  --i-reference-taxonomy unite-tax-ver8_dynamic_s_02.02.2019+mock.qza \
+  --o-classifier UNITE-v8.0-dynamic-s-02.02.2019+mock-classifier.qza
+
+
+#################################################################################
+ASSIGN TAXONOMY (ITS)
+#################################################################################
+#ASSIGN taxonomy to clustered-rep-seqs.qza
+#USE the classifier trained on the latest UNITE database with mock community
+
+qiime feature-classifier classify-sklearn \
+  --i-classifier UNITE-v8.0-dynamic-s-02.02.2019+mock-classifier.qza \
+  --i-reads clustered-rep-seqs.qza \
+  --o-classification taxonomy.qza
+
+qiime metadata tabulate \
+  --m-input-file taxonomy.qza \
+  --o-visualization taxonomy.qzv
+  
+qiime taxa barplot \
+  --i-table clustered-table.qza \
+  --i-taxonomy taxonomy.qza \
+  --m-metadata-file metadata.txt \
+  --o-visualization taxa-bar-plots.qzv
+
+
+#################################################################################
+QUALITY CONTROL OF OTUS (ITS only)
+#################################################################################
+#FILTER by sequence matches based on alignment quality (e.g. 212 bases of the query sequence aligned out of 250 total bases (length/qlen = 0.85)
+#Multiple independent researchers have shown that a lot more OTUs are present at length/qlen ≤ 0.85 (perhaps due to sequence or PCR error)
+#You can create a scatter plot of length/qlen vs. number of sequences and draw a curve, the inflection point of the curve will usually fall around 0.85.
+#REMOVE any sequences that has a length/qlen ≤ 0.85, although it does depend on your dataset.
+#USE the "dynamic" version of the UNITE database that includes synthetic mock community sequences so that these are not filtered out.
+#This database is kept updated and is available in the lab's Shared Drive.
+
+#IMPORT UNITE database
+qiime tools import \
+  --type 'FeatureData[Sequence]' \
+  --input-path sh_refs_qiime_ver8_dynamic_s_02.02.2019+mock.fasta \
+  --output-path sh_refs_qiime_ver8_dynamic_s_02.02.2019+mock.qza
+
+#COMPARE how your representative sequences sequences matched up to a database
+#Can download output tsv from browser and examine the data more carefully
+qiime quality-control evaluate-seqs \
+  --i-query-sequences clustered-seqs.qza \
+  --i-reference-sequences sh_refs_qiime_ver8_dynamic_s_02.02.2019+mock.qza \
+  --o-visualization clustered-seqs-evaluated.qzv
+  
+#VIZUALIZE the output
+qiime tools view clustered-seqs-evaluated.qzv
+
+#EXCLUDE sequences that are ≤ 0.85 qlength (percent coverage) in BLAST search
+#This step will help remove non-biological sequences
+#We want to keep identity at 0 because we do not want to remove new species of fungi that have not been discovered
+qiime quality-control exclude-seqs \
+  --i-query-sequences clustered-seqs.qza \
+  --i-reference-sequences sh_refs_qiime_ver8_dynamic_s_02.02.2019+mock.qza \
+  --p-method blast \
+  --p-perc-identity 0.0 \
+  --p-perc-query-aligned 0.85 \
+  --o-sequence-hits quality-control-hits.qza \
+  --o-sequence-misses quality-control-misses.qza
+
+#EXAMINE the quality control misses so that you can be sure that what you're going to throw out do not contain a large portion of fungal sequences.
+#If a lot of the sequences are legitimate, you will need to tweak the parameters in the "exclude-seqs" step above
+#You can blast the whole file and examine the results
+qiime tools export \
+  --input-path quality-control-misses.qza \
+  --output-path exported-quality-control
+
+#FILTER the main feature table so that it excludes OTUs that are considered misses
+qiime feature-table filter-features \
+  --i-table clustered-table.qza \
+  --m-metadata-file quality-control-misses.qza \
+  --p-exclude-ids \
+  --o-filtered-table table-quality-control.qza
+
+#These filtering criteria are very strict so if you have a mock community in your dataset, you can use it to determine the best parameters for your data.
+
+
+#################################################################################
+SUBSET AND FILTER SAMPLES FROM FEATURE TABLES & TAXONOMY (ITS)
+#################################################################################
+#Filtering methods are different for different project requirements 
+#https://docs.qiime2.org/2018.8/tutorials/filtering/ <-- very useful! Look under "Metadata-based filtering"
+
+#FILTER & REMOVE NON-FUNGAL OTUS
+qiime taxa filter-table \
+  --i-table table-quality-control.qza \
+  --i-taxonomy taxonomy.qza \
+  --p-include k__ \
+  --p-exclude Unassigned,Rhizaria,Protista,Metazoa \
+  --o-filtered-table table-quality-control-fungi-only.qza
+
+#CHECK sequences
+qiime feature-table summarize \
+  --i-table table-quality-control-fungi-only.qza \
+  --o-visualization table-quality-control-fungi-only.qzv
+
+#VISUALIZE the data through a barplot
+qiime taxa barplot \
+  --i-table table-quality-control-fungi-only.qza \
+  --i-taxonomy taxonomy.qza \
+  --m-metadata-file metadata.txt \
+  --o-visualization taxa-bar-plots-fungi-only.qzv
+
+
+#################################################################################
+QUALITY CONTROL OF OTUS (16S & 18S)
+#################################################################################
+#FILTER table to remove Unassigned, mitochondria, and chloroplast sequences
+qiime taxa filter-table \
+  --i-table table.qza \
+  --i-taxonomy taxonomy.qza \
+  --p-exclude Unassigned,mitochondria,chloroplast,Eukaryota \
+  --o-filtered-table table-prok-only.qza
+  
+qiime feature-table summarize \
+  --i-table table-prok-only.qza \
+  --o-visualization table-prok-only.qzv \
+  --m-metadata-file metadata.txt
+  
+#CREATE another taxa barplot for data exploration
+qiime taxa barplot \
+  --i-table table-prok-only.qza \
+  --i-taxonomy taxonomy.qza \
+  --m-metadata-file metadata.txt \
+  --o-visualization taxa_barplot_table-prok-only.qzv
+
+
+#################################################################################
+DEALING WITH CONTROLS
+#################################################################################
+#OBSERVE the positive and negative controls from the exported table
+#Is there evidence for tag bleeding/switching? With our dual barcode system, this is not a common case.
+#Are there any negative control sequences that appears in abundance? If so, these need to be removed.
+#Use what you've learned to further filter the table
+
+#EXPORT OTU table into BIOM format for further processing
+qiime tools export \
+  --input-path table-prok-only.qza \
+  --output-path exported-table
+
+#CONVERT biom to tsv for analyses elsewhere
+#IMPORTANT: To get a table with taxonomy, use the workflow in the next section
+biom convert \
+  -i exported-table/feature-table.biom \
+  -o exported-table/feature-table-filtered.tsv \
+  --to-tsv \
+  --header-key taxonomy
+
+#This is where you can decide to remove other OTUs or samples that did not pass other filtering steps
+#Samples could be removed using the options within "qiime feature-table XXX" or manual through the spreadsheet and then converted back into biom for further processign in QIIME.
+
+#CONVERT tsv (text) file back to biome format
+biom convert \
+  -i exported-table/feature-table-filtered.tsv \
+  -o exported-table/feature-table-filtered.biom \
+  --to-hdf5 \
+  --table-type="OTU table" \
+  --process-obs-metadata taxonomy
+
+#Import biom tables into qza
+qiime tools import \
+  --input-path exported-table/feature-table-filtered.biom \
+  --type 'FeatureTable[Frequency]' \
+  --input-format BIOMV210Format \
+  --output-path table-filtered.qza
+
+#In the example below, we have determined that there were 4 sequences in the positive control that might have bled into the other samples, so we remove any OTUs that have <4 sequences
+qiime feature-table filter-samples \
+  --i-table table-filtered.qza \
+  --p-min-features 4 \
+  --o-filtered-table filtered-table.qza
+
+
+#################################################################################
+ADD TAXONOMY TO OTU TABLE FOR FURTHER ANALYSES OUTSIDE OF QIIME
+#################################################################################
+#EXPORT taxonomy artifact
+qiime tools export \
+  --input-path taxonomy.qza \
+  --output-path exported-taxonomy
+
+#COPY and re-name taxonomy file
+cp exported-taxonomy/taxonomy.tsv exported-taxonomy/biom-taxonomy.tsv
+
+#REPLACE the header of the table with QIIME style formatting
+#OTUID	taxonomy	confidence
+
+#Export rarefied OTU table
+qiime tools export \
+  --input-path core-metrics-results/rarefied_table.qza \
+  --output-path exported-rarefied-table
+
+#ADD metadata to the OTU table and convert it to tsv to view
+biom add-metadata \
+ -i exported-rarefied-table/feature-table.biom \
+ -o exported-rarefied-table/feature-table-with-taxonomy.biom \
+ --observation-metadata-fp exported-taxonomy/taxonomy.tsv \
+ --sc-separated taxonomy
+
+#CONVERT biom to tsv for analyses elsewhere
+biom convert \
+  -i exported-rarefied-table/feature-table-with-taxonomy.biom \
+  -o exported-rarefied-table/feature-table-with-taxonomy.tsv \
+  --to-tsv \
+  --process-obs-metadata taxonomy \
+  --header-key taxonomy
+
+#################################################################################
+PREPARING FOR PHYLOGENETIC DIVERSITY ANALYSES
+#################################################################################
+#Phylogenetic analyses should only be used for alignable genes (16S, 18S, etc...)
+#Currently it is still difficult to fit ITS genes into a phylogenetic context so we use traditional metrics to analyze ITS.
+qiime phylogeny align-to-tree-mafft-fasttree \
+  --i-sequences rep-seqs.qza \
+  --o-alignment aligned-rep-seqs.qza \
+  --o-masked-alignment masked-aligned-rep-seqs.qza \
+  --o-tree unrooted-tree.qza \
+  --o-rooted-tree rooted-tree.qza
+  --output-dir phylo
+
+#################################################################################
+COMMUNITY COMPARISONS WITHIN SAMPLES (ALPHA DIVERSITY)
+#################################################################################
+qiime diversity alpha-rarefaction \
+  --i-table table.qza \
+  --i-phylogeny phylo/rooted-tree.qza \
+  --p-max-depth 1234 \
+  --m-sample-metadata-file metadata.txt \
+  --o-visualization alpha-rarefaction.qzv
+
+#Core metrics with phylogenetic measures (used for 16S & 18S)
+qiime diversity core-metrics-phylogenetic \
+  --i-phylogeny rooted-tree.qza \
+  --i-table table.qza \
+  --p-sampling-depth 1234 \
+  --m-sample-metadata-file metadata.txt \
+  --output-dir core-metrics-results
+
+#Core metrics with only traditional measures (used for ITS)
+qiime diversity core-metrics \
+  --i-table table.qza \
+  --p-sampling-depth 1234 \
+  --m-sample-metadata-file metadata.txt \
+  --output-dir core-metrics-results
+
+#Graphically and statistically compare certain outputs from the core metrics that you want
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/shannon_vector.qza \
+  --m-sample-metadata-file metadata.txt \
+  --o-visualization core-metrics-results/shannon-vector-group-significance.qzv
+
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/faith_pd_vector.qza \
+  --m-sample-metadata-file metadata.txt \
+  --o-visualization core-metrics-results/faith-pd-group-significance.qzv
+
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/observed_otus_vector.qza \
+  --m-sample-metadata-file metadata.txt \
+  --o-visualization core-metrics-results/observed-otus-group-significance.qzv
+
+#################################################################################
+COMMUNITY COMPARISONS ACROSS SAMPLES (BETA DIVERSITY)
+#################################################################################
+#For ITS, you won't have the unifrac distances because these were made from phylogenetic distances.
+#Instead you would use the classical Bray-Curtis and/or Jaccard distances.
+
+qiime diversity beta-group-significance \
+  --i-distance-matrix core-metrics-results/unweighted_unifrac_distance_matrix.qza \
+  --m-sample-metadata-file metadata.txt \
+  --m-metadata-column BodySite \
+  --o-visualization core-metrics-results/unweighted-unifrac-body-site-significance.qzv \
+  --p-pairwise
+
+qiime diversity beta-group-significance \
+  --i-distance-matrix core-metrics-results/unweighted_unifrac_distance_matrix.qza \
+  --m-sample-metadata-file metadata.txt \
+  --m-metadata-column Subject \
+  --o-visualization core-metrics-results/unweighted-unifrac-subject-group-significance.qzv \
+  --p-pairwise
+
+qiime emperor plot \
+  --i-pcoa core-metrics-results/unweighted_unifrac_pcoa_results.qza \
+  --m-sample-metadata-file metadata.txt \
+  --p-custom-axes DaysSinceExperimentStart \
+  --o-visualization core-metrics-results/unweighted-unifrac-emperor-DaysSinceExperimentStart.qzv
+
+qiime emperor plot \
+  --i-pcoa core-metrics-results/bray_curtis_pcoa_results.qza \
+  --m-sample-metadata-file metadata.txt \
+  --p-custom-axes DaysSinceExperimentStart \
+  --o-visualization core-metrics-results/bray-curtis-emperor-DaysSinceExperimentStart.qzv
+
+
+*********************************************************************************
+***********************    SOME USEFUL QIIME COMMANDS    ************************
+*********************************************************************************
+
+#################################################################################
+EXTRACTING DATA FROM QIIME2 ARTIFACTS
+#################################################################################
+#EXPORT OTU table into BIOM format for processing elsewhere (optional)
+#This tool exports the main data contained in a qza and can be more useful
+qiime tools export \
+  --input-path table.qza \
+  --output-path exported-table
+
+#EXTRACT the table from a qza file
+#This tool extracts all the data within a qza and is less useful
+mkdir extracted-table
+qiime tools extract \
+  --input-path table.qza \
+  --output-path extracted-table
+
+#EXTRACT demux data from a qza file
+mkdir extracted-demux
+qiime tools extract \
+  --input-path demux.qza \
+  --output-path extracted-demux
+  
+#################################################################################
+#RARIFYING AND COLLAPSING TABLES
+#################################################################################
+qiime feature-table rarefy \
+  --i-table filtered-table.qza \
+  --p-sampling-depth 2831 \
+  --o-rarefied-table rarefied-table.qza
+  
+#To collapse at different taxonomic levels, please take a look at taxa collapse, which will collapse 3 a table (rarefied or not) based on a specified taxonomic level via a provided taxonomy artifact:
+qiime taxa collapse \
+  --i-table rarefied-table.qza \
+  --i-taxonomy taxonomy.qza \
+  --p-level 3 \
+  --o-collapsed-table my-rarefied-table-at-level-3.qza
+
