@@ -19,7 +19,7 @@ This way you have a good grasp of the basic function as well as the breadth of c
 #READ Peter Kennedy's discussion on various filtering steps to best treat your amplicon data:
 #http://fungal-sequencing-methods-discussion.blogspot.com/
 
-#READ Nhu Nguyen's discussion on why clustering is still necessary:
+#READ Nhu Nguyen's discussion on why clustering is still necessary for fungal ITS data:
 #https://drive.google.com/file/d/1vjwqG6oNNDH0NjbpMOBhqqCtzpmFF4dz
 
 
@@ -194,7 +194,8 @@ qiime tools view demux.qzv
 TRIM CONSERVED REGION FROM ITS (ITS only)
 #################################################################################
 #Trim conserved regions with ITSxpress.
-#We found that without trimming, taxonomic classification is not very accurate.
+#Without trimming, taxonomic classification is not very accurate, therefore it is highly recommended that you trim your ITS data.
+#This process can take a while.
 
 qiime itsxpress trim-pair-output-unmerged \
   --i-per-sample-sequences demux.qza \
@@ -203,14 +204,14 @@ qiime itsxpress trim-pair-output-unmerged \
   --p-threads 0 \
   --o-trimmed demux-ITS-trimmed.qza
 
-#The trimmed ITS can be passed onto the DADA2 denoising step below. No further truncation is necessary!
+#The trimmed ITS can be passed onto the DADA2 denoising step below. No further trimming or truncation is necessary!
 
 #################################################################################
 SEQUENCE QUALITY FILTER & DENOISE
 #################################################################################
 #FILTER sequences (quality filtering) using DADA2
 #Quality control (can be done on either multiplexed or demultiplexed sequences)
-#Currently, DADA2 OTUs (CSVs) for conservative genes such as 16S and 18S are robust enough to be considered as "good" OTUs.
+#Currently, DADA2 OTUs (CSVs) for conservative genes such as 16S and 18S are robust enough to be considered as "good" OTUs and clustering is not recommended.
 #For less conservative genes such as ITS, clustering is still necessary and highly recommended.
 #--p-n-reads-learn default [1M seqs = 250Mb]; this is ~10% of the demultiplexed data. Adjust this value to correspond to your data. If your data has < 10M seqs, use the default.
 #--p-n-threads 0 = use all available cores; with 8 cores & 64GB of memory, a single run took about 12 hours.
@@ -270,7 +271,7 @@ CLUSTER OTU (ITS only)
 #################################################################################
 #CLUSTER OTUs by using vsearch
 #Read Peter Kennedy's discussion on the type of clustering to use: http://fungal-sequencing-methods-discussion.blogspot.com/
-#Here we use de novo clustering
+#Here we use de novo clustering, which is probably the best for maximizing diversity discovery in your data.
 qiime vsearch cluster-features-de-novo \
   --i-table table.qza  \
   --i-sequences rep-seqs.qza \
@@ -291,7 +292,8 @@ TRAIN CLASSIFERS (Optional)
 #Certain classifiers (such as for 16S) are pre-trained but other more specific ones such as ITS will need to be trained.
 #It is highly recommended that classifiers be kept updated as identification sequence databases are updated.
 #Pre-trained 16S & 18S classifiers (GreenGenes and SILVA databases) are available through the QIIME2 website: https://docs.qiime2.org/2018.11/data-resources/
-#Pre-trained ITS is available on our website: http://www2.hawaii.edu/~nn33/lab/resources.html
+#Note that certain SILVA database sometimes only classify organisms to genus -- not very useful if you want species information.
+#Pre-trained ITS classifiers are available on our website: http://www2.hawaii.edu/~nn33/lab/resources.html
 #Trained classifiers only works with the version of QIIME2 that they are trained on.
 
 #OR train your own classifier
@@ -306,10 +308,10 @@ https://unite.ut.ee/repository.php
 cd UNITE
 wget https://files.plutof.ut.ee/doi/0F/6F/0F6F4C85C2553655B6E2B4A0F0BF85AE64A2F769BD82A32053CDEC8708454057.zip
 
-#Rename the file
+#RENAME the file
 mv 0F6F4C85C2553655B6E2B4A0F0BF85AE64A2F769BD82A32053CDEC8708454057.zip UNITE8.0_2018-11-18.zip
 
-#Unzip the file
+#UNZIP the file
 tar -zxvf UNITE8.0_2018-11-18.zip
 
 #This will create a series of fasta and taxonomy files
@@ -323,18 +325,21 @@ tar -zxvf UNITE8.0_2018-11-18.zip
 cat sh_taxonomy_qiime_ver8_dynamic_s_02.02.2019.txt mock_synthetic_v2_taxonomy.txt mock_v1_taxonomy.txt >> sh_taxonomy_qiime_ver8_dynamic_s_02.02.2019+mock.txt
 cat sh_refs_qiime_ver8_dynamic_s_02.02.2019.fasta mock_v1.fasta mock_synthetic_v2.fasta >> sh_refs_qiime_ver8_dynamic_s_02.02.2019+mock.fasta
 
+#IMPORT the fasta file
 qiime tools import \
  --type FeatureData[Sequence] \
  --input-path sh_refs_qiime_ver8_dynamic_s_02.02.2019+mock.fasta \
  --output-path unite-fasta-ver8_dynamic_s_02.02.2019+mock.qza
 
+#IMPORT the taxonomy file
 qiime tools import \
  --type FeatureData[Taxonomy] \
  --input-format HeaderlessTSVTaxonomyFormat \
  --input-path sh_taxonomy_qiime_ver8_dynamic_s_02.02.2019+mock.txt \
  --output-path unite-tax-ver8_dynamic_s_02.02.2019+mock.qza
 
-#This step took about 10 minutes on a fast machine
+#TRAIN the classifier
+#This step took about 10 minutes on a fast local machine
 qiime feature-classifier fit-classifier-naive-bayes \
   --i-reference-reads unite-fasta-ver8_dynamic_s_02.02.2019+mock.qza \
   --i-reference-taxonomy unite-tax-ver8_dynamic_s_02.02.2019+mock.qza \
@@ -345,7 +350,7 @@ qiime feature-classifier fit-classifier-naive-bayes \
 ASSIGN TAXONOMY (ITS)
 #################################################################################
 #ASSIGN taxonomy to clustered-rep-seqs.qza
-#USE the classifier trained on the latest UNITE database with mock community
+#Use the classifier trained on the latest UNITE database with mock community.
 
 qiime feature-classifier classify-sklearn \
   --i-classifier UNITE-v8.0-dynamic-s-02.02.2019+mock-classifier.qza \
@@ -500,7 +505,7 @@ biom convert \
   --table-type="OTU table" \
   --process-obs-metadata taxonomy
 
-#Import biom tables into qza
+#IMPORT biom tables into qza
 qiime tools import \
   --input-path exported-table/feature-table-filtered.biom \
   --type 'FeatureTable[Frequency]' \
@@ -553,6 +558,7 @@ PREPARING FOR PHYLOGENETIC DIVERSITY ANALYSES
 #################################################################################
 #Phylogenetic analyses should only be used for alignable genes (16S, 18S, etc...)
 #Currently it is still difficult to fit ITS genes into a phylogenetic context so we use traditional metrics to analyze ITS.
+#New tools are being created that will allow ITS to be mapped onto scaffolds, but I have yet to see a system that works well and easily implemented.
 qiime phylogeny align-to-tree-mafft-fasttree \
   --i-sequences rep-seqs.qza \
   --o-alignment aligned-rep-seqs.qza \
