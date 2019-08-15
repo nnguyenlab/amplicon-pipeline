@@ -2,6 +2,11 @@ NGUYEN LAB AMPLICON ANALYSIS PIPELINE WITH QIIME2
 updated July 2019
 
 #################################################################################
+GOT COMMENTS OR EDITS?
+#################################################################################
+#I'm constantly updating this protocol and would like your help. If you notice something that is not clear or could be done more effectilvely, please send in a pull request!
+
+#################################################################################
 CITATION
 #################################################################################
 #It took a number of years and a lot of refinement to produce this pipeline. 
