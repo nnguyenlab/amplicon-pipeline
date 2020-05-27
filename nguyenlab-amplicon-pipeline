@@ -104,8 +104,6 @@ mv raw_data/reverse.fastq gz_data/reverse.fastq
 
 #EXTRACT barcodes from I1 & I2 files using macqiime (QIIME1)
 #You will need to have QIIME1 (MACQIIME) intalled on your machine
-#If you don't have MACQIIME installed, you can call the script "extract_barcodes.py" from the lab's "Lab resources/Scripts/anaconda/bin" shared folder
-#You will need to run the "extract_barcodes.py" from that folder because it requires other scripts from that folder to work
 #The program will create "read1.fastq", "read2.fastq", and "barcodes.fastq". "The barcodes.fastq" file is the only useful file
 
 cd gz_data
