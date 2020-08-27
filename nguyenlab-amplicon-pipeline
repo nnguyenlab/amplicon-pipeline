@@ -1,5 +1,5 @@
 NGUYEN LAB AMPLICON ANALYSIS PIPELINE WITH QIIME2
-updated July 2019
+Version 2.4, updated July 2020
 
 #################################################################################
 GOT COMMENTS OR EDITS?
@@ -161,6 +161,7 @@ qiime tools import \
   --input-format PairedEndFastqManifestPhred33 \
   --output-path imported-paired-end-seqs.qza
 
+#Once you have performed this step, go directly to making the demux summary file using the "qiime demux summarize" command.
 
 #################################################################################
 DEMULTIPLEX DATA
@@ -214,7 +215,7 @@ SEQUENCE QUALITY FILTER & DENOISE
 #################################################################################
 #FILTER sequences (quality filtering) using DADA2
 #Quality control (can be done on either multiplexed or demultiplexed sequences)
-#Currently, DADA2 OTUs (CSVs) for conservative genes such as 16S and 18S are robust enough to be considered as "good" OTUs and clustering is not recommended.
+#Currently, DADA2 OTUs (CSVs) for conservative genes such as 16S and 18S are robust enough to be considered as "good" OTUs.
 #For less conservative genes such as ITS, clustering is still necessary and highly recommended.
 #--p-n-reads-learn default [1M seqs = 250Mb]; this is ~10% of the demultiplexed data. Adjust this value to correspond to your data. If your data has < 10M seqs, use the default.
 #--p-n-threads 0 = use all available cores; with 8 cores & 64GB of memory, a single run took about 12 hours.
@@ -230,7 +231,21 @@ qiime dada2 denoise-paired \
   --o-denoising-stats denoising-stats.qza \
   --p-n-threads 0 \
   --p-n-reads-learn 1000000
-  
+
+#For ITS, trim away at least the primers (ITS1F = 22bp, ITS2 = 20bp)
+#Since ITSxpress plugins don't work for later version, trimming away at least the primers will help.
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs demux.qza \
+  --p-trim-left-f 22 \
+  --p-trunc-len-f 249 \
+  --p-trim-left-r 20 \
+  --p-trunc-len-r 249 \
+  --o-representative-sequences rep-seqs.qza \
+  --o-table table.qza \
+  --o-denoising-stats denoising-stats.qza \
+  --p-n-threads 0 \
+  --p-n-reads-learn 1000000
+
 #TABULATE the denoising statistics
 qiime metadata tabulate \
   --m-input-file denoising-stats.qza \
@@ -287,7 +302,6 @@ qiime feature-table summarize \
   --i-table clustered-table.qza \
   --m-sample-metadata-file metadata.txt \
   --o-visualization clustered-table.qzv
-
 
 #################################################################################
 TRAIN CLASSIFERS (Optional)
@@ -484,17 +498,42 @@ DEALING WITH CONTROLS
 #Are there any negative control sequences that appears in abundance? If so, these need to be removed.
 #Use what you've learned to further filter the table
 
+#IMPORTANT: The first part of this workflow extracts taxonomy and append it to an existing OTU table. This is highly recommended.
 #EXPORT OTU table into BIOM format for further processing
 qiime tools export \
   --input-path table-prok-only.qza \
   --output-path exported-table
 
+#IMPORTANT: The first part of this workflow extracts taxonomy and append it to an existing OTU table. This is highly recommended.
+#EXPORT taxonomy artifact
+qiime tools export \
+  --input-path taxonomy.qza \
+  --output-path exported-taxonomy
+
+#COPY and re-name taxonomy file
+cp exported-taxonomy/taxonomy.tsv exported-taxonomy/biom-taxonomy.tsv
+
+#REPLACE the header of the table with QIIME style formatting
+#OTUID	taxonomy	confidence
+
+#EXPORT OTU table into BIOM format for further processing
+qiime tools export \
+  --input-path table-quality-control-fungi-only.qza \
+  --output-path exported-table
+
+#ADD metadata to the OTU table and convert it to tsv to view
+biom add-metadata \
+ -i exported-table/feature-table.biom \
+ -o exported-table/feature-table-with-taxonomy.biom \
+ --observation-metadata-fp exported-taxonomy/biom-taxonomy.tsv \
+ --sc-separated taxonomy
+
 #CONVERT biom to tsv for analyses elsewhere
-#IMPORTANT: To get a table with taxonomy, use the workflow in the next section
 biom convert \
-  -i exported-table/feature-table.biom \
-  -o exported-table/feature-table-filtered.tsv \
+  -i exported-table/feature-table-with-taxonomy.biom \
+  -o exported-table/feature-table-with-taxonomy.tsv \
   --to-tsv \
+  --process-obs-metadata taxonomy \
   --header-key taxonomy
 
 #This is where you can decide to remove other OTUs or samples that did not pass other filtering steps
@@ -508,7 +547,7 @@ biom convert \
   --table-type="OTU table" \
   --process-obs-metadata taxonomy
 
-#IMPORT biom tables into qza
+#Import biom tables into qza
 qiime tools import \
   --input-path exported-table/feature-table-filtered.biom \
   --type 'FeatureTable[Frequency]' \
@@ -555,6 +594,71 @@ biom convert \
   --to-tsv \
   --process-obs-metadata taxonomy \
   --header-key taxonomy
+
+#################################################################################
+ANCOM DIFFERENTIAL ABUNDANCE
+#################################################################################
+#This method detects the differential abundance of and OTU based on their metadata categories.
+#It is similar to the traditional "Indicator Species Analysis"", but much more robust and appropriate for microbiome work.
+#Similar to "Indicator Species Analysis", this method will only detect those that are clearly represented in one group of samples and not the rest.
+#It isn't able to take into account high abundance of an OTU in one group of samples vs. low abundance in another.
+#Therefore non-significance shouldn't be interpreted too heavily.
+
+#REMOVE lower abundance OTUs to reduce noise and increase computational efficiency
+# --p-min-samples = minimum number of sample that an OTU has to be found in to be kept
+# --p-min-frequency = The minimum number of sequences that must be present in an OTU to be kept
+
+qiime feature-table filter-features \
+  --i-table table-leucopax.qza \
+  --p-min-frequency 10 \
+  --p-min-samples 4 \
+  --o-filtered-table table-leucopax-ancom.qza
+
+#ADD speudo-counts to replace the zeros that affect statistics
+qiime composition add-pseudocount \
+  --i-table table-leucopax-ancom.qza \
+  --o-composition-table table-leucopax-ancom-pseudocount.qza
+
+#CALCULATE differential abundance among the different categories of samples
+qiime composition ancom \
+  --i-table table-chloromat-ancom-pseudocount.qza \
+  --m-metadata-file metadata.txt \
+  --m-metadata-column treatment \
+  --o-visualization ancom-chloromat-Location.qzv
+
+qiime tools view ancom-chloromat-Location.qzv
+
+qiime composition ancom \
+  --i-table table-leucopax-ancom-pseudocount.qza \
+  --m-metadata-file metadata.txt \
+  --m-metadata-column substrate \
+  --o-visualization ancom-leucopax-substrate.qzv
+
+
+#################################################################################
+MAKING A HEATMAP
+#################################################################################
+#filter to keep only the most abundant taxa
+qiime feature-table filter-features \
+  --i-table table-leucopax.qza \
+  --p-min-frequency 100 \
+  --o-filtered-table table-leucopax-highly-abundant.qza
+
+qiime taxa collapse \
+  --i-table table-leucopax-highly-abundant.qza \
+  --i-taxonomy clustered-taxonomy.qza \
+  --p-level 3 \
+  --o-collapsed-table table-leucopax-highly-abundant-collapsed-phylum.qza
+
+qiime feature-table heatmap \
+  --i-table table-leucopax-highly-abundant-collapsed-phylum.qza \
+  --m-sample-metadata-file metadata.txt \
+  --m-sample-metadata-column substrate \
+  --p-color-scheme coolwarm \
+  --o-visualization table-leucopax-heatmap-substrate.qzv
+  
+qiime tools view table-leucopax-heatmap-substrate.qzv
+
 
 #################################################################################
 PREPARING FOR PHYLOGENETIC DIVERSITY ANALYSES
